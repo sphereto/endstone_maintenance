@@ -1,34 +1,39 @@
 name: CI
 
+# Runs on every push to main and every pull request. The release workflow reuses it through `workflow_call`
+# so a tagged release is always built by exactly the same jobs.
+
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
   format:
-    name: clang-format
+    name: Format
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check formatting
+      - name: Install clang-format
         run: |
           sudo apt-get update -y -q
           sudo apt-get install -y -q clang-format-18
-          find include src tests -name '*.h' -o -name '*.cpp' | xargs clang-format-18 --dry-run --Werror
+
+      - name: Check formatting
+        run: find include src tests \( -name '*.h' -o -name '*.cpp' \) | xargs clang-format-18 --dry-run --Werror
 
   test:
-    name: Unit tests (${{ matrix.os }})
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -43,25 +48,19 @@ jobs:
         with:
           arch: x86_64
 
-      - name: Set up CMake and Ninja
-        uses: lukka/get-cmake@v4
-
       - name: Configure
-        run: cmake -S . -B build-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMAINTENANCE_BUILD_PLUGIN=OFF -DMAINTENANCE_BUILD_TESTS=ON
+        run: cmake --preset tests
 
       - name: Build
-        run: cmake --build build-tests
+        run: cmake --build --preset tests
 
       - name: Test
-        run: ctest --test-dir build-tests --output-on-failure
+        run: ctest --preset tests
 
   build:
-    name: Build plugin (${{ matrix.name }})
+    name: Build (${{ matrix.name }})
     needs: [format, test]
     runs-on: ${{ matrix.os }}
-    # Needed only to attach binaries to a GitHub release on tag builds; PR builds from forks stay read-only.
-    permissions:
-      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -73,23 +72,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Check tag matches project version
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          project_version=$(sed -n 's/^ *VERSION \([0-9][0-9.]*\)$/\1/p' CMakeLists.txt | head -n 1)
-          if [ "v${project_version}" != "${GITHUB_REF_NAME}" ]; then
-            echo "::error::Tag ${GITHUB_REF_NAME} does not match CMakeLists.txt version v${project_version}"
-            exit 1
-          fi
-
       - name: Set up Clang and libc++
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -y -q
-          sudo apt-get install -y -q clang-18 libc++-18-dev libc++abi-18-dev ninja-build
-          echo "CC=clang-18" >> "$GITHUB_ENV"
-          echo "CXX=clang++-18" >> "$GITHUB_ENV"
+          sudo apt-get install -y -q clang libc++-18-dev libc++abi-18-dev ninja-build
+          clang --version
 
       - name: Set up MSVC
         if: runner.os == 'Windows'
@@ -97,30 +85,18 @@ jobs:
         with:
           arch: x86_64
 
-      - name: Set up CMake and Ninja
-        uses: lukka/get-cmake@v4
-
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        run: cmake --preset ${{ matrix.name }}
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build --preset ${{ matrix.name }}
 
-      - name: Upload build artifact
+      - name: Upload plugin
         uses: actions/upload-artifact@v7
         with:
           name: endstone-maintenance-${{ matrix.name }}
           if-no-files-found: error
           path: |
-            build/endstone_*.so
-            build/endstone_*.dll
-            build/endstone_*.pdb
-
-      - name: Attach binaries to the GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v3
-        with:
-          generate_release_notes: true
-          files: |
-            build/endstone_*.so
-            build/endstone_*.dll
+            build/${{ matrix.name }}/endstone_*.so
+            build/${{ matrix.name }}/endstone_*.dll
+            build/${{ matrix.name }}/endstone_*.pdb

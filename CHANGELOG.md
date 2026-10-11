@@ -26,8 +26,10 @@ All notable changes to this project are documented here. The format follows
   without downloading Endstone (`-DMAINTENANCE_BUILD_PLUGIN=OFF -DMAINTENANCE_BUILD_TESTS=ON`).
 - The config file is located through the plugin data folder, supports comments, and is preserved when the plugin saves it.
 - Config is reloaded with `/maintenance reload` instead of on every player join.
-- CI split into format check, unit tests and plugin builds; a release is created from `v*` tags and the tag must match
-  the version in `CMakeLists.txt`. Actions bumped to current major versions.
+- CI is now `ci.yml` (format check, unit tests, Linux and Windows builds). Releases are a separate `release.yml`
+  triggered by `v*` tags: it checks the tag against `CMakeLists.txt` and this changelog, reuses the full CI, then
+  publishes the binaries with SHA256 checksums and the changelog entry as release notes. Actions bumped to current
+  major versions and the third-party release and CMake setup actions removed.
 - Plugin version is defined once, in `CMakeLists.txt`.
 
 ### Fixed

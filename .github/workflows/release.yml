@@ -1,0 +1,92 @@
+name: Release
+
+# Push a tag like v3.0.0 to publish a release:
+#   1. verify the tag matches CMakeLists.txt and has a CHANGELOG.md entry,
+#   2. run the full CI (format, tests, Linux + Windows builds),
+#   3. publish a GitHub release with the binaries, SHA256 checksums and the changelog entry as release notes.
+#
+# Tags containing a hyphen (for example v3.1.0-rc.1) are published as pre-releases.
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify version and changelog
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check tag against CMakeLists.txt and CHANGELOG.md
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+
+          project_version=$(sed -n 's/^ *VERSION \([0-9][0-9.]*\)$/\1/p' CMakeLists.txt | head -n 1)
+          base_version="${version%%-*}"
+          if [ "$project_version" != "$base_version" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match the version in CMakeLists.txt (${project_version})."
+            exit 1
+          fi
+
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {found=1; next} /^## \[/ || /^\[[^]]+\]: / {found=0} found' CHANGELOG.md > release-notes.md
+          if ! grep -q '[^[:space:]]' release-notes.md; then
+            echo "::error::CHANGELOG.md has no entry for [${version}]."
+            exit 1
+          fi
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  ci:
+    name: CI
+    needs: verify
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish GitHub release
+    needs: [verify, ci]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download plugin builds and release notes
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Collect files and checksums
+        shell: bash
+        run: |
+          mkdir release
+          cp artifacts/endstone-maintenance-*/endstone_*.so artifacts/endstone-maintenance-*/endstone_*.dll release/
+          cd release
+          sha256sum endstone_* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          flags=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --title "Maintenance ${GITHUB_REF_NAME#v}" \
+            --notes-file artifacts/release-notes/release-notes.md \
+            --verify-tag \
+            "${flags[@]}"
