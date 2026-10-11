@@ -1,0 +1,38 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: "3.0.0"
+    validations:
+      required: true
+  - type: input
+    id: endstone-version
+    attributes:
+      label: Endstone version
+      placeholder: "0.11.13"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Server operating system
+      options: [Windows, Linux]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Include what you expected, and the steps to reproduce.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log
+      description: Relevant lines from the server console. Remove your maintenance password first.
+      render: text

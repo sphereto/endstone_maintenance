@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check formatting
+        run: |
+          sudo apt-get update -y -q
+          sudo apt-get install -y -q clang-format-18
+          find include src tests -name '*.h' -o -name '*.cpp' | xargs clang-format-18 --dry-run --Werror
+
+  test:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86_64
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4
+
+      - name: Configure
+        run: cmake -S . -B build-tests -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMAINTENANCE_BUILD_PLUGIN=OFF -DMAINTENANCE_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-tests
+
+      - name: Test
+        run: ctest --test-dir build-tests --output-on-failure
+
+  build:
+    name: Build plugin (${{ matrix.name }})
+    needs: [format, test]
+    runs-on: ${{ matrix.os }}
+    # Needed only to attach binaries to a GitHub release on tag builds; PR builds from forks stay read-only.
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-24.04
+          - name: windows
+            os: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check tag matches project version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          project_version=$(sed -n 's/^ *VERSION \([0-9][0-9.]*\)$/\1/p' CMakeLists.txt | head -n 1)
+          if [ "v${project_version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match CMakeLists.txt version v${project_version}"
+            exit 1
+          fi
+
+      - name: Set up Clang and libc++
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y -q
+          sudo apt-get install -y -q clang-18 libc++-18-dev libc++abi-18-dev ninja-build
+          echo "CC=clang-18" >> "$GITHUB_ENV"
+          echo "CXX=clang++-18" >> "$GITHUB_ENV"
+
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86_64
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: endstone-maintenance-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            build/endstone_*.so
+            build/endstone_*.dll
+            build/endstone_*.pdb
+
+      - name: Attach binaries to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: |
+            build/endstone_*.so
+            build/endstone_*.dll
