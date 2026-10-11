@@ -12,3 +12,8 @@ _deps
 CMakeUserPresets.json
 .idea
 build
+
+build-*/
+.cache/
+.vscode/
+*.user
