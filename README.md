@@ -1,6 +1,8 @@
 # Maintenance
 
 [![CI](https://github.com/sphereto/endstone_maintenance/actions/workflows/ci.yml/badge.svg)](https://github.com/sphereto/endstone_maintenance/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/sphereto/endstone_maintenance?include_prereleases)](https://github.com/sphereto/endstone_maintenance/releases/latest)
+[![Endstone](https://img.shields.io/badge/Endstone-0.11.x-8a2be2)](https://endstone.dev)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A lightweight C++ plugin for [Endstone](https://endstone.dev) servers that puts the server into a password-protected
