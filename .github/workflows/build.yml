@@ -144,6 +144,11 @@ jobs:
             echo "Maintenance ${VERSION} @ ${SHA} (${BUILD_TYPE})"
             echo
             echo '```'
-            (cd "build/${{ matrix.name }}" && sha256sum endstone_*.so endstone_*.dll 2>/dev/null)
+            # Only one of the two patterns matches on each OS; sha256sum exits non-zero for the unmatched one,
+            # which would fail the step under bash -e, so check each file first.
+            cd "build/${{ matrix.name }}"
+            for f in endstone_*.so endstone_*.dll; do
+              if [ -e "$f" ]; then sha256sum "$f"; fi
+            done
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
