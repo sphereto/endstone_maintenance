@@ -6,7 +6,12 @@
 include/maintenance/   public headers (config.h, form_response.h, plugin.h)
 src/                   implementation; config.cpp and form_response.cpp have no Endstone dependency
 tests/                 dependency-free unit tests for the Endstone-independent code
-.github/workflows/     ci.yml (format, tests, builds), release.yml (tagged releases), weekly Endstone update check
+.github/workflows/
+    ci.yml                    format, unit tests and plugin builds on every PR and push to main
+    build.yml                 reusable: builds the plugin on Linux and Windows and uploads the binaries
+    test-build.yml            downloadable builds for trying a change on a server (every non-main push, or manual)
+    release.yml               tagged releases
+    endstone-update-check.yml weekly check for a newer Endstone release
 ```
 
 Keep logic that does not need the server API in `config` / `form_response` (or a new Endstone-free file listed in
@@ -21,6 +26,12 @@ cmake --preset tests && cmake --build --preset tests && ctest --preset tests
 # full plugin build (Linux needs clang + libc++; see README)
 cmake --preset linux && cmake --build --preset linux
 ```
+
+On Windows the plugin must be built with **clang-cl** (Endstone refuses MSVC's `cl.exe`) and CMake 3.29 or newer; see
+the README. The unit tests have no such restriction and also run under MSVC in CI.
+
+To test a change on a real server, push your branch and download the artifact from the **Test build** run, or start the
+workflow by hand to pick a different Endstone version or build type.
 
 Format before committing (CI uses clang-format 18 with the repo's `.clang-format`):
 

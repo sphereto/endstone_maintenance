@@ -1,0 +1,149 @@
+name: Build plugin
+
+# Reusable workflow: builds the plugin for Linux and Windows and uploads the binaries as artifacts.
+# It is called by ci.yml (and through it by release.yml) and by test-build.yml; it has no triggers of its own.
+#
+# Endstone's toolchain requirements, which this workflow satisfies:
+#   Linux:   Clang + libc++
+#   Windows: clang-cl (inside a Visual Studio developer environment), CMake >= 3.29, Ninja
+
+on:
+  workflow_call:
+    inputs:
+      snapshot:
+        description: "Name artifacts Maintenance-<version>-<sha>-<os> and keep them longer (for manual testing)"
+        type: boolean
+        default: false
+      build-type:
+        description: "CMake build type"
+        type: string
+        default: RelWithDebInfo
+      endstone-version:
+        description: "Endstone git tag to build against; empty uses the version pinned in CMakeLists.txt"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-24.04
+          - name: windows
+            os: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out version and artifact name
+        id: meta
+        shell: bash
+        env:
+          SNAPSHOT: ${{ inputs.snapshot }}
+          BUILD_TYPE: ${{ inputs.build-type }}
+          ENDSTONE_OVERRIDE: ${{ inputs.endstone-version }}
+          PLATFORM: ${{ matrix.name }}
+        run: |
+          version=$(sed -n 's/^ *VERSION \([0-9][0-9.]*\)$/\1/p' CMakeLists.txt | head -n 1)
+          sha="${GITHUB_SHA::7}"
+
+          case "$BUILD_TYPE" in
+            Debug | Release | RelWithDebInfo | MinSizeRel) ;;
+            *) echo "::error::Unsupported build type '$BUILD_TYPE'"; exit 1 ;;
+          esac
+
+          args=("-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
+          if [ -n "$ENDSTONE_OVERRIDE" ]; then
+            if ! [[ "$ENDSTONE_OVERRIDE" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+              echo "::error::Invalid Endstone version '$ENDSTONE_OVERRIDE'"; exit 1
+            fi
+            args+=("-DENDSTONE_VERSION=${ENDSTONE_OVERRIDE}")
+          fi
+
+          if [ "$SNAPSHOT" = "true" ]; then
+            name="Maintenance-v${version}-${sha}-${PLATFORM}"
+            retention=14
+          else
+            name="endstone-maintenance-${PLATFORM}"
+            retention=7
+          fi
+
+          {
+            echo "version=${version}"
+            echo "sha=${sha}"
+            echo "artifact=${name}"
+            echo "retention=${retention}"
+            echo "cmake_args=${args[*]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up CMake and Ninja
+        uses: lukka/get-cmake@v4.4.4
+
+      - name: Set up Clang and libc++ (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y -q
+          sudo apt-get install -y -q clang libc++-18-dev libc++abi-18-dev
+          clang --version
+
+      - name: Set up Visual Studio environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86_64
+
+      - name: Make sure clang-cl is available (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command clang-cl -ErrorAction SilentlyContinue)) {
+            Write-Host "clang-cl not found on PATH, installing LLVM"
+            choco install llvm -y --no-progress
+            "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            $env:PATH = "C:\Program Files\LLVM\bin;$env:PATH"
+          }
+          clang-cl --version
+          cmake --version
+
+      - name: Configure
+        shell: bash
+        run: cmake --preset ${{ matrix.name }} ${{ steps.meta.outputs.cmake_args }}
+
+      - name: Build
+        shell: bash
+        run: cmake --build --preset ${{ matrix.name }}
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.meta.outputs.artifact }}
+          retention-days: ${{ fromJSON(steps.meta.outputs.retention) }}
+          if-no-files-found: error
+          path: |
+            build/${{ matrix.name }}/endstone_*.so
+            build/${{ matrix.name }}/endstone_*.dll
+            build/${{ matrix.name }}/endstone_*.pdb
+
+      - name: Summarize
+        shell: bash
+        env:
+          ARTIFACT: ${{ steps.meta.outputs.artifact }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          BUILD_TYPE: ${{ inputs.build-type }}
+        run: |
+          {
+            echo "### ${ARTIFACT}"
+            echo
+            echo "Maintenance ${VERSION} @ ${SHA} (${BUILD_TYPE})"
+            echo
+            echo '```'
+            (cd "build/${{ matrix.name }}" && sha256sum endstone_*.so endstone_*.dll 2>/dev/null)
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

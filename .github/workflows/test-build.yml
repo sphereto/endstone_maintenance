@@ -1,0 +1,41 @@
+name: Test build
+
+# Produces downloadable plugin binaries so you can try a change on a real Endstone server without cutting a release.
+#
+#  - Every push to a branch other than main builds Linux and Windows binaries.
+#  - Run it by hand from the Actions tab (Run workflow) on any branch, optionally against a different Endstone
+#    version or build type.
+#
+# Download the artifact from the run page, unzip it, and drop the .so (Linux) or .dll (Windows) into the server's
+# `plugins/` folder. Artifacts are kept for 14 days. This workflow does not run the format check or unit tests; ci.yml does.
+
+on:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+    inputs:
+      build-type:
+        description: Build type
+        type: choice
+        options: [RelWithDebInfo, Debug, Release]
+        default: RelWithDebInfo
+      endstone-version:
+        description: Endstone tag to build against (empty = the version pinned in CMakeLists.txt)
+        type: string
+        default: ""
+
+concurrency:
+  group: test-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    uses: ./.github/workflows/build.yml
+    with:
+      snapshot: true
+      build-type: ${{ inputs.build-type || 'RelWithDebInfo' }}
+      endstone-version: ${{ inputs.endstone-version || '' }}

@@ -21,9 +21,13 @@
     },
     {
       "name": "windows",
-      "displayName": "Plugin (Windows, MSVC)",
+      "displayName": "Plugin (Windows, clang-cl)",
+      "description": "Endstone requires clang-cl on Windows. Run from a Visual Studio developer prompt with LLVM installed and CMake 3.29 or newer.",
       "inherits": "base",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      },
       "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
     },
     {
