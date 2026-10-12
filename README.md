@@ -77,19 +77,33 @@ All commands need the `maintenance.command` permission (operators by default). `
 
 ## Building from source
 
-You need CMake 3.21+, Ninja, and Clang with libc++ (Linux) or MSVC (Windows). Endstone is downloaded automatically.
+Endstone dictates the toolchain; it is downloaded automatically during configure.
+
+| Platform | Requirements |
+|----------|--------------|
+| Linux    | CMake 3.21+, Ninja, Clang with libc++ |
+| Windows  | CMake **3.29+**, Ninja, **clang-cl** (LLVM) and the Visual Studio C++ build tools / Windows SDK |
 
 ```sh
 # Linux
 sudo apt install clang libc++-dev libc++abi-dev ninja-build
 cmake --preset linux && cmake --build --preset linux
 
-# Windows (from a "x64 Native Tools" prompt)
+# Windows: run from an "x64 Native Tools Command Prompt for VS" with LLVM (clang-cl) on PATH
 cmake --preset windows && cmake --build --preset windows
 ```
 
+The plain MSVC compiler (`cl.exe`) is not supported for the plugin itself, because Endstone refuses to configure with it.
+
 The plugin ends up in `build/<preset>/` as `endstone_Maintenance.so` / `.dll`.
 To build against a different Endstone version, pass `-DENDSTONE_VERSION=vX.Y.Z`.
+
+### Trying a build without compiling it yourself
+
+Every push to a branch other than `main` runs the **Test build** workflow, and you can start it manually from the
+**Actions** tab (**Run workflow**) on any branch. Open the run, download the `Maintenance-v<version>-<commit>-linux` or
+`...-windows` artifact, unzip it and drop the `.so` / `.dll` into your server's `plugins/` folder. Artifacts are kept
+for 14 days.
 
 Run the unit tests (no Endstone download needed):
 

@@ -58,45 +58,6 @@ jobs:
         run: ctest --preset tests
 
   build:
-    name: Build (${{ matrix.name }})
+    name: Build
     needs: [format, test]
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: linux
-            os: ubuntu-24.04
-          - name: windows
-            os: windows-2022
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Clang and libc++
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update -y -q
-          sudo apt-get install -y -q clang libc++-18-dev libc++abi-18-dev ninja-build
-          clang --version
-
-      - name: Set up MSVC
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x86_64
-
-      - name: Configure
-        run: cmake --preset ${{ matrix.name }}
-
-      - name: Build
-        run: cmake --build --preset ${{ matrix.name }}
-
-      - name: Upload plugin
-        uses: actions/upload-artifact@v7
-        with:
-          name: endstone-maintenance-${{ matrix.name }}
-          if-no-files-found: error
-          path: |
-            build/${{ matrix.name }}/endstone_*.so
-            build/${{ matrix.name }}/endstone_*.dll
-            build/${{ matrix.name }}/endstone_*.pdb
+    uses: ./.github/workflows/build.yml

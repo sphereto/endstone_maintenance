@@ -17,6 +17,9 @@ All notable changes to this project are documented here. The format follows
 - Configurable messages and form text (`messages.*`) and `maintenance.apply_effects`.
 - Enabling maintenance now locks players who are already online; disabling it releases them.
 - Unit tests for the config parser and form-response parser.
+- `test-build.yml` workflow: downloadable Linux and Windows builds for every non-main push, or on demand with a
+  chosen build type and Endstone version, so changes can be tried on a real server without cutting a release.
+- `build.yml` reusable workflow shared by CI, releases and test builds.
 - CMake presets, `.editorconfig`, CONTRIBUTING, issue and pull-request templates, Dependabot and a weekly Endstone
   update check.
 
@@ -34,6 +37,8 @@ All notable changes to this project are documented here. The format follows
 - Plugin version is defined once, in `CMakeLists.txt`.
 
 ### Fixed
+- Windows plugin build failed to configure: Endstone requires clang-cl (and CMake 3.29+), not MSVC's `cl.exe`. The
+  `windows` preset and CI now use clang-cl.
 - Unit tests failed to compile with MSVC: the test macros stringized raw string literals, which MSVC's default
   preprocessor cannot do. The macros no longer stringize their arguments.
 - Password check accepted any form response that merely *contained* the password; it is now an exact comparison of the
