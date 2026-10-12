@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <exception>
 #include <fstream>
 #include <sstream>
 #include <system_error>

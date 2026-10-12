@@ -22,6 +22,7 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 - Updated to Endstone 0.11.13.
+- LICENSE: added a 2026 copyright line for this project alongside the original notice (MIT text unchanged).
 - Reorganised sources into `include/maintenance/` and `src/`; the Endstone-independent code can be built and tested
   without downloading Endstone (`-DMAINTENANCE_BUILD_PLUGIN=OFF -DMAINTENANCE_BUILD_TESTS=ON`).
 - The config file is located through the plugin data folder, supports comments, and is preserved when the plugin saves it.
@@ -33,6 +34,8 @@ All notable changes to this project are documented here. The format follows
 - Plugin version is defined once, in `CMakeLists.txt`.
 
 ### Fixed
+- Unit tests failed to compile with MSVC: the test macros stringized raw string literals, which MSVC's default
+  preprocessor cannot do. The macros no longer stringize their arguments.
 - Password check accepted any form response that merely *contained* the password; it is now an exact comparison of the
   text field value.
 - Sound effects used an invalid `effect ... playsound` command; they now use the player sound API.

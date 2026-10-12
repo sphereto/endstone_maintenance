@@ -1,6 +1,9 @@
 #pragma once
 
 // Tiny dependency-free test harness so CI never has to download a test framework.
+//
+// The macros deliberately do not stringize their arguments (`#expr`): MSVC's default preprocessor does not escape
+// raw string literals when stringizing, which breaks any check that mentions one. The file and line identify the check.
 
 #include <functional>
 #include <iostream>
@@ -31,20 +34,20 @@ struct Registrar {
     static ::test::Registrar registrar_##name(#name, test_##name); \
     static void test_##name()
 
-#define CHECK(expr)                                                                    \
-    do {                                                                               \
-        if (!(expr)) {                                                                 \
-            ++::test::failures();                                                      \
-            std::cerr << __FILE__ << ":" << __LINE__ << ": CHECK failed: " #expr "\n"; \
-        }                                                                              \
+#define CHECK(expr)                                                         \
+    do {                                                                    \
+        if (!(expr)) {                                                      \
+            ++::test::failures();                                           \
+            std::cerr << __FILE__ << ":" << __LINE__ << ": CHECK failed\n"; \
+        }                                                                   \
     } while (false)
 
-#define CHECK_EQ(a, b)                                                                           \
-    do {                                                                                         \
-        const auto &va = (a);                                                                    \
-        const auto &vb = (b);                                                                    \
-        if (!(va == vb)) {                                                                       \
-            ++::test::failures();                                                                \
-            std::cerr << __FILE__ << ":" << __LINE__ << ": CHECK_EQ failed: " #a " != " #b "\n"; \
-        }                                                                                        \
+#define CHECK_EQ(a, b)                                                         \
+    do {                                                                       \
+        const auto &check_lhs = (a);                                           \
+        const auto &check_rhs = (b);                                           \
+        if (!(check_lhs == check_rhs)) {                                       \
+            ++::test::failures();                                              \
+            std::cerr << __FILE__ << ":" << __LINE__ << ": CHECK_EQ failed\n"; \
+        }                                                                      \
     } while (false)
