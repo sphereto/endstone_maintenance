@@ -1,9 +1,12 @@
 #include "maintenance/plugin.h"
 
 #include "maintenance/form_response.h"
+#include "maintenance/movement.h"
+#include "maintenance/util.h"
 
 #include <algorithm>
-#include <cctype>
+#include <format>
+#include <utility>
 
 #ifndef MAINTENANCE_VERSION
 #define MAINTENANCE_VERSION "0.0.0-dev"
@@ -38,69 +41,29 @@ namespace maintenance {
 
 namespace {
 
-constexpr const char *kDefaultPassword = "passwordhere";
 constexpr std::size_t kPasswordControlIndex = 2; // Label, Label, TextInput
-
-constexpr const char *kDefaultConfig =
-    "# Maintenance plugin configuration. Run /maintenance reload after editing this file.\n"
-    "\n"
-    "# Master switch. Can also be toggled in-game with /maintenance on|off.\n"
-    "maintenance.enabled: true\n"
-    "\n"
-    "# Password players must enter to join while maintenance is on.\n"
-    "maintenance.password: passwordhere\n"
-    "\n"
-    "# Seconds a player has to enter the password before being kicked.\n"
-    "maintenance.kick_delay: 15\n"
-    "\n"
-    "# Apply blindness / slowness / resistance while a player is on the login screen.\n"
-    "maintenance.apply_effects: true\n"
-    "\n"
-    "# Comma-separated player names that skip the login screen (case-insensitive).\n"
-    "maintenance.whitelist:\n"
-    "\n"
-    "# Text shown in the server list while maintenance is on. Leave empty to keep the normal MOTD.\n"
-    "messages.motd: §cServer under maintenance\n"
-    "\n"
-    "# Messages shown to players.\n"
-    "messages.form_title: Server Maintenance\n"
-    "messages.form_body: The server is currently in maintenance mode.\n"
-    "messages.form_input_label: Password To Enter The Server\n"
-    "messages.form_submit: Login\n"
-    "messages.timeout: You took too long to login during maintenance.\n"
-    "messages.wrong_password: Wrong Password!\n"
-    "messages.closed: Come Check Back Soon!\n"
-    "messages.accepted: Password accepted. Welcome!\n"
-    "messages.bypass: Maintenance is active, but you have bypass permission.\n";
-
-std::string toLower(std::string s)
-{
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return s;
-}
 
 } // namespace
 
 void MaintenancePlugin::onEnable()
 {
     config_ = std::make_unique<Config>(getDataFolder() / "config.yml");
-    if (!config_->saveDefault(kDefaultConfig)) {
+    if (!config_->saveDefault(defaultConfigText())) {
         getLogger().error("Could not read or create {}; using built-in defaults.", config_->path().string());
     }
+    refreshSettings();
     warnAboutPassword();
 
     registerEvent(&MaintenancePlugin::onPlayerJoin, *this);
     registerEvent(&MaintenancePlugin::onPlayerQuit, *this);
-    registerEvent(&MaintenancePlugin::onPlayerMove, *this, endstone::EventPriority::High);
-    registerEvent(&MaintenancePlugin::onPlayerChat, *this, endstone::EventPriority::High);
-    registerEvent(&MaintenancePlugin::onPlayerCommand, *this, endstone::EventPriority::High);
-    registerEvent(&MaintenancePlugin::onPlayerInteract, *this, endstone::EventPriority::High);
-    registerEvent(&MaintenancePlugin::onPlayerDropItem, *this, endstone::EventPriority::High);
-    registerEvent(&MaintenancePlugin::onBlockBreak, *this, endstone::EventPriority::High);
-    registerEvent(&MaintenancePlugin::onBlockPlace, *this, endstone::EventPriority::High);
     registerEvent(&MaintenancePlugin::onServerListPing, *this);
+
+    // `ignore_cancelled` makes Endstone skip our handler when an earlier plugin already cancelled the event.
+    registerEvent(&MaintenancePlugin::onPlayerMove, *this, endstone::EventPriority::High, true);
+    registerLockGuards<endstone::PlayerChatEvent, endstone::PlayerCommandEvent, endstone::PlayerInteractEvent,
+                       endstone::PlayerInteractActorEvent, endstone::PlayerDropItemEvent,
+                       endstone::PlayerPickupItemEvent, endstone::PlayerItemConsumeEvent, endstone::PlayerEmoteEvent,
+                       endstone::BlockBreakEvent, endstone::BlockPlaceEvent>();
 
     getLogger().info("Maintenance mode is {}.", isEnabled() ? "ON" : "off");
 }
@@ -108,6 +71,12 @@ void MaintenancePlugin::onEnable()
 void MaintenancePlugin::onDisable()
 {
     unlockEveryone();
+}
+
+template <typename... EventTypes>
+void MaintenancePlugin::registerLockGuards()
+{
+    (registerEvent(&MaintenancePlugin::cancelIfLocked<EventTypes>, *this, endstone::EventPriority::High, true), ...);
 }
 
 // --------------------------------------------------------------------------------------------------------------------
@@ -156,6 +125,7 @@ bool MaintenancePlugin::handleToggle(endstone::CommandSender &sender, bool enabl
     if (!config_->save()) {
         sender.sendErrorMessage("Maintenance mode changed, but the config file could not be saved.");
     }
+    refreshSettings();
 
     if (enable) {
         for (auto *player : getServer().getOnlinePlayers()) {
@@ -177,8 +147,8 @@ void MaintenancePlugin::handleStatus(endstone::CommandSender &sender) const
 {
     sender.sendMessage("Maintenance mode: {}", isEnabled() ? ColorFormat::Red + "ON" : ColorFormat::Green + "OFF");
     sender.sendMessage("Players on the login screen: {}", locked_.size());
-    sender.sendMessage("Whitelisted players: {}", config_->getList("maintenance.whitelist").size());
-    sender.sendMessage("Kick delay: {}s", config_->getInt("maintenance.kick_delay", 15));
+    sender.sendMessage("Whitelisted players: {}", settings_.whitelist.size());
+    sender.sendMessage("Kick delay: {}s", settings_.kick_delay);
 }
 
 bool MaintenancePlugin::handleReload(endstone::CommandSender &sender)
@@ -187,6 +157,7 @@ bool MaintenancePlugin::handleReload(endstone::CommandSender &sender)
         sender.sendErrorMessage("Could not read {}.", config_->path().string());
         return true;
     }
+    refreshSettings();
     warnAboutPassword();
     sender.sendMessage(ColorFormat::Green + "Maintenance config reloaded.");
     return true;
@@ -194,7 +165,7 @@ bool MaintenancePlugin::handleReload(endstone::CommandSender &sender)
 
 void MaintenancePlugin::handleList(endstone::CommandSender &sender) const
 {
-    const auto names = config_->getList("maintenance.whitelist");
+    const auto &names = settings_.whitelist;
     if (names.empty()) {
         sender.sendMessage("The maintenance whitelist is empty.");
         return;
@@ -208,9 +179,10 @@ void MaintenancePlugin::handleList(endstone::CommandSender &sender) const
 
 bool MaintenancePlugin::handleWhitelist(endstone::CommandSender &sender, bool add, const std::string &name)
 {
-    auto names = config_->getList("maintenance.whitelist");
+    auto names = settings_.whitelist;
+    const auto lowered = toLower(name);
     const auto it = std::find_if(names.begin(), names.end(), [&](const std::string &existing) {
-        return toLower(existing) == toLower(name);
+        return toLower(existing) == lowered;
     });
 
     if (add) {
@@ -232,6 +204,7 @@ bool MaintenancePlugin::handleWhitelist(endstone::CommandSender &sender, bool ad
     if (!config_->save()) {
         sender.sendErrorMessage("Whitelist changed, but the config file could not be saved.");
     }
+    refreshSettings();
     sender.sendMessage(ColorFormat::Green +
                        std::format("{} {} the maintenance whitelist.", name, add ? "added to" : "removed from"));
     return true;
@@ -243,6 +216,7 @@ bool MaintenancePlugin::handlePassword(endstone::CommandSender &sender, const st
     if (!config_->save()) {
         sender.sendErrorMessage("Password changed, but the config file could not be saved.");
     }
+    refreshSettings();
     sender.sendMessage(ColorFormat::Green + "Maintenance password updated.");
     return true;
 }
@@ -253,14 +227,20 @@ bool MaintenancePlugin::handlePassword(endstone::CommandSender &sender, const st
 
 void MaintenancePlugin::onPlayerJoin(endstone::PlayerJoinEvent &event)
 {
+    auto &player = event.getPlayer();
+
+    // A player who left the login screen earlier may still carry our effects (they are saved with the player).
+    const bool stale_effects = pending_cleanup_.erase(player.getUniqueId()) > 0;
+    const bool exempt = isEnabled() && isExempt(player);
+    if (stale_effects && (!isEnabled() || exempt)) {
+        clearEffects(player);
+    }
+
     if (!isEnabled()) {
         return;
     }
-
-    auto &player = event.getPlayer();
-    if (isExempt(player)) {
-        player.sendMessage(ColorFormat::Green +
-                           message("messages.bypass", "Maintenance is active, but you have bypass permission."));
+    if (exempt) {
+        player.sendMessage(ColorFormat::Green + settings_.messages.bypass);
         return;
     }
     lockPlayer(player);
@@ -270,52 +250,33 @@ void MaintenancePlugin::onPlayerQuit(endstone::PlayerQuitEvent &event)
 {
     const auto uuid = event.getPlayer().getUniqueId();
     cancelPendingKick(uuid);
-    locked_.erase(uuid);
+
+    // The player is already disconnecting here, so effects cannot be removed reliably; remember to do it on rejoin.
+    if (const auto it = locked_.find(uuid); it != locked_.end()) {
+        if (it->second.effects_applied) {
+            pending_cleanup_.insert(uuid);
+        }
+        locked_.erase(it);
+    }
 }
 
 void MaintenancePlugin::onPlayerMove(endstone::PlayerMoveEvent &event)
 {
-    if (isLocked(event.getPlayer())) {
+    if (!isLocked(event.getPlayer())) {
+        return;
+    }
+
+    // Turning the camera does not move the player. Cancelling such an event would only make Endstone teleport the
+    // player back (and snap their view) for every camera turn, so only real position changes are cancelled.
+    const auto &from = event.getFrom();
+    const auto &to = event.getTo();
+    if (isPositionalMove(to.getX() - from.getX(), to.getY() - from.getY(), to.getZ() - from.getZ())) {
         event.setCancelled(true);
     }
 }
 
-void MaintenancePlugin::onPlayerChat(endstone::PlayerChatEvent &event)
-{
-    if (isLocked(event.getPlayer())) {
-        event.setCancelled(true);
-    }
-}
-
-void MaintenancePlugin::onPlayerCommand(endstone::PlayerCommandEvent &event)
-{
-    if (isLocked(event.getPlayer())) {
-        event.setCancelled(true);
-    }
-}
-
-void MaintenancePlugin::onPlayerInteract(endstone::PlayerInteractEvent &event)
-{
-    if (isLocked(event.getPlayer())) {
-        event.setCancelled(true);
-    }
-}
-
-void MaintenancePlugin::onPlayerDropItem(endstone::PlayerDropItemEvent &event)
-{
-    if (isLocked(event.getPlayer())) {
-        event.setCancelled(true);
-    }
-}
-
-void MaintenancePlugin::onBlockBreak(endstone::BlockBreakEvent &event)
-{
-    if (isLocked(event.getPlayer())) {
-        event.setCancelled(true);
-    }
-}
-
-void MaintenancePlugin::onBlockPlace(endstone::BlockPlaceEvent &event)
+template <typename EventType>
+void MaintenancePlugin::cancelIfLocked(EventType &event)
 {
     if (isLocked(event.getPlayer())) {
         event.setCancelled(true);
@@ -324,12 +285,8 @@ void MaintenancePlugin::onBlockPlace(endstone::BlockPlaceEvent &event)
 
 void MaintenancePlugin::onServerListPing(endstone::ServerListPingEvent &event)
 {
-    if (!isEnabled()) {
-        return;
-    }
-    const auto motd = message("messages.motd", "");
-    if (!motd.empty()) {
-        event.setMotd(motd);
+    if (isEnabled() && !settings_.messages.motd.empty()) {
+        event.setMotd(settings_.messages.motd);
     }
 }
 
@@ -337,21 +294,9 @@ void MaintenancePlugin::onServerListPing(endstone::ServerListPingEvent &event)
 // Locking
 // --------------------------------------------------------------------------------------------------------------------
 
-bool MaintenancePlugin::isEnabled() const
-{
-    return config_ && config_->getBool("maintenance.enabled", true);
-}
-
 bool MaintenancePlugin::isExempt(endstone::Player &player) const
 {
-    if (player.hasPermission("maintenance.bypass")) {
-        return true;
-    }
-    const auto name = toLower(player.getName());
-    const auto names = config_->getList("maintenance.whitelist");
-    return std::any_of(names.begin(), names.end(), [&](const std::string &entry) {
-        return toLower(entry) == name;
-    });
+    return player.hasPermission("maintenance.bypass") || settings_.isWhitelisted(player.getName());
 }
 
 bool MaintenancePlugin::isLocked(const endstone::Player &player) const
@@ -361,15 +306,12 @@ bool MaintenancePlugin::isLocked(const endstone::Player &player) const
 
 void MaintenancePlugin::lockPlayer(endstone::Player &player)
 {
-    if (!locked_.insert(player.getUniqueId()).second) {
+    if (!locked_.try_emplace(player.getUniqueId(), LockState{settings_.apply_effects}).second) {
         return;
     }
 
-    if (config_->getBool("maintenance.apply_effects", true)) {
-        const auto target = "effect \"" + player.getName() + "\" ";
-        runServerCommand(target + "blindness 1000000 255 true");
-        runServerCommand(target + "slowness 1000000 255 true");
-        runServerCommand(target + "resistance 1000000 255 true");
+    if (settings_.apply_effects) {
+        applyEffects(player);
     }
 
     showLoginForm(player);
@@ -378,13 +320,9 @@ void MaintenancePlugin::lockPlayer(endstone::Player &player)
 
 void MaintenancePlugin::unlockPlayer(endstone::Player &player)
 {
-    const auto uuid = player.getUniqueId();
-    cancelPendingKick(uuid);
-    if (locked_.erase(uuid) == 0) {
+    if (!releaseLock(player)) {
         return;
     }
-
-    runServerCommand("effect \"" + player.getName() + "\" clear");
     player.playSound(player.getLocation(), "random.levelup", 1.0F, 1.0F);
 }
 
@@ -400,9 +338,47 @@ void MaintenancePlugin::unlockEveryone()
     pending_kicks_.clear();
 }
 
+bool MaintenancePlugin::releaseLock(endstone::Player &player)
+{
+    const auto uuid = player.getUniqueId();
+    cancelPendingKick(uuid);
+
+    const auto it = locked_.find(uuid);
+    if (it == locked_.end()) {
+        return false;
+    }
+
+    const bool had_effects = it->second.effects_applied;
+    locked_.erase(it);
+    if (had_effects && !clearEffects(player)) {
+        pending_cleanup_.insert(uuid);
+    }
+    return true;
+}
+
+void MaintenancePlugin::kickLocked(endstone::Player &player, const std::string &reason)
+{
+    // Effects are saved with the player, so they have to be removed before the kick or they would survive the relog.
+    releaseLock(player);
+    player.kick(reason);
+}
+
+void MaintenancePlugin::applyEffects(endstone::Player &player)
+{
+    const auto target = "effect \"" + player.getName() + "\" ";
+    runServerCommand(target + "blindness 1000000 255 true");
+    runServerCommand(target + "slowness 1000000 255 true");
+    runServerCommand(target + "resistance 1000000 255 true");
+}
+
+bool MaintenancePlugin::clearEffects(endstone::Player &player)
+{
+    return runServerCommand("effect \"" + player.getName() + "\" clear");
+}
+
 void MaintenancePlugin::showLoginForm(endstone::Player &player)
 {
-    const int delay = std::max(1, config_->getInt("maintenance.kick_delay", 15));
+    const int delay = settings_.effectiveKickDelay();
     const auto uuid = player.getUniqueId();
 
     cancelPendingKick(uuid);
@@ -411,7 +387,7 @@ void MaintenancePlugin::showLoginForm(endstone::Player &player)
             [this, uuid]() {
                 pending_kicks_.erase(uuid);
                 if (auto *p = getServer().getPlayer(uuid); p != nullptr && isLocked(*p)) {
-                    p->kick(message("messages.timeout", "You took too long to login during maintenance."));
+                    kickLocked(*p, settings_.messages.timeout);
                 }
             },
             static_cast<std::uint64_t>(delay) * 20)) {
@@ -419,41 +395,36 @@ void MaintenancePlugin::showLoginForm(endstone::Player &player)
     }
 
     endstone::ModalForm form;
-    form.setTitle(message("messages.form_title", "Server Maintenance"));
+    form.setTitle(settings_.messages.form_title);
     form.addControl(endstone::Label(ColorFormat::Gold + "Time Left: " + ColorFormat::Green + std::to_string(delay) +
                                     "s" + ColorFormat::Reset));
-    form.addControl(endstone::Label(message("messages.form_body", "The server is currently in maintenance mode.")));
-    form.addControl(endstone::TextInput("password_input",
-                                        message("messages.form_input_label", "Password To Enter The Server"), ". . ."));
-    form.setSubmitButton(message("messages.form_submit", "Login"));
+    form.addControl(endstone::Label(settings_.messages.form_body));
+    form.addControl(endstone::TextInput("password_input", settings_.messages.form_input_label, ". . ."));
+    form.setSubmitButton(settings_.messages.form_submit);
 
-    form.setOnSubmit([this, uuid](endstone::Player *p, const std::string &response) {
+    form.setOnSubmit([this](endstone::Player *p, const std::string &response) {
         if (p == nullptr || !isLocked(*p)) {
             return;
         }
 
-        const auto expected = config_->getString("maintenance.password", kDefaultPassword);
+        const auto &expected = settings_.password;
         const auto entered = formTextAt(response, kPasswordControlIndex);
 
         if (!expected.empty() && entered.has_value() && constantTimeEquals(*entered, expected)) {
             unlockPlayer(*p);
-            p->sendMessage(ColorFormat::Green + message("messages.accepted", "Password accepted. Welcome!"));
+            p->sendMessage(ColorFormat::Green + settings_.messages.accepted);
             p->sendTitle("Welcome", "Maintenance Mode");
         }
         else {
-            cancelPendingKick(uuid);
-            locked_.erase(uuid);
-            p->kick(message("messages.wrong_password", "Wrong Password!"));
+            kickLocked(*p, settings_.messages.wrong_password);
         }
     });
 
-    form.setOnClose([this, uuid](endstone::Player *p) {
+    form.setOnClose([this](endstone::Player *p) {
         if (p == nullptr || !isLocked(*p)) {
             return;
         }
-        cancelPendingKick(uuid);
-        locked_.erase(uuid);
-        p->kick(message("messages.closed", "Come Check Back Soon!"));
+        kickLocked(*p, settings_.messages.closed);
     });
 
     player.sendForm(form);
@@ -467,28 +438,29 @@ void MaintenancePlugin::cancelPendingKick(const endstone::UUID &uuid)
     }
 }
 
-void MaintenancePlugin::runServerCommand(const std::string &command)
+bool MaintenancePlugin::runServerCommand(const std::string &command)
 {
-    if (!getServer().dispatchCommand(getServer().getCommandSender(), command)) {
+    const bool ok = getServer().dispatchCommand(getServer().getCommandSender(), command);
+    if (!ok) {
         getLogger().debug("Command failed: {}", command);
     }
+    return ok;
+}
+
+void MaintenancePlugin::refreshSettings()
+{
+    settings_ = Settings::fromConfig(*config_);
 }
 
 void MaintenancePlugin::warnAboutPassword() const
 {
-    const auto password = config_->getString("maintenance.password", kDefaultPassword);
-    if (password.empty()) {
+    if (settings_.password.empty()) {
         getLogger().warning("maintenance.password is empty: nobody can log in except players with bypass access.");
     }
-    else if (password == kDefaultPassword) {
+    else if (settings_.password == Settings::kDefaultPassword) {
         getLogger().warning(
             "maintenance.password is still the default; change it in the config or with /maintenance password.");
     }
-}
-
-std::string MaintenancePlugin::message(const std::string &key, const std::string &def) const
-{
-    return config_ ? config_->getString(key, def) : def;
 }
 
 } // namespace maintenance

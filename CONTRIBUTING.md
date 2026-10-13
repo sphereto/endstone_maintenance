@@ -3,8 +3,8 @@
 ## Layout
 
 ```
-include/maintenance/   public headers (config.h, form_response.h, plugin.h)
-src/                   implementation; config.cpp and form_response.cpp have no Endstone dependency
+include/maintenance/   headers (config.h, settings.h, form_response.h, movement.h, util.h, plugin.h)
+src/                   implementation; config.cpp, settings.cpp and form_response.cpp have no Endstone dependency
 tests/                 dependency-free unit tests for the Endstone-independent code
 .github/workflows/
     ci.yml                    format, unit tests and plugin builds on every PR and push to main
@@ -14,7 +14,7 @@ tests/                 dependency-free unit tests for the Endstone-independent c
     endstone-update-check.yml weekly check for a newer Endstone release
 ```
 
-Keep logic that does not need the server API in `config` / `form_response` (or a new Endstone-free file listed in
+Keep logic that does not need the server API in `config` / `settings` / `form_response` (or a new Endstone-free file listed in
 `MAINTENANCE_CORE_SOURCES`) so it can be unit tested.
 
 ## Development loop

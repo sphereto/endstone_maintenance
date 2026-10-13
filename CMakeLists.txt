@@ -17,9 +17,11 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Sources that do not depend on Endstone. They are compiled straight into the plugin and the test
 # executable (rather than a static library) so both always use the same C++ standard library ABI.
+# Absolute paths so the list can be reused unchanged from the tests/ subdirectory.
 set(MAINTENANCE_CORE_SOURCES
-        src/config.cpp
-        src/form_response.cpp)
+        ${PROJECT_SOURCE_DIR}/src/config.cpp
+        ${PROJECT_SOURCE_DIR}/src/form_response.cpp
+        ${PROJECT_SOURCE_DIR}/src/settings.cpp)
 
 # Endstone's public headers trigger -Wextra/-Wpedantic warnings we cannot fix, so the plugin target only
 # gets -Wall; the Endstone-independent core and the tests are built with the strict set.

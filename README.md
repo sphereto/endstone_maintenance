@@ -14,8 +14,10 @@ Operators, players with the `maintenance.bypass` permission and whitelisted name
 ## Features
 
 - **Password login form** with a configurable timeout; players who fail, close the form or run out of time are kicked.
-- **Full lockdown** while on the login screen: movement, chat, commands, interaction, block breaking/placing and item
-  dropping are all blocked, plus optional blindness/slowness/resistance effects.
+- **Full lockdown** while on the login screen: movement, chat, commands, interaction (blocks and entities), block
+  breaking/placing, item dropping, pickup and use, and emotes are all blocked, plus optional
+  blindness/slowness/resistance effects. Looking around is allowed. The effects are removed when the player logs in or is
+  kicked, or at their next join if they disconnected on the login screen.
 - **In-game control** with `/maintenance`: toggle the mode, manage the whitelist and change the password without editing
   files or restarting. Turning maintenance on also locks players who are already online.
 - **Maintenance whitelist** for people who should always get in.

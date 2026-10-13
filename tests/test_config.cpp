@@ -109,3 +109,72 @@ TEST(config_lists)
     CHECK_EQ(names.size(), std::size_t{2});
     CHECK_EQ(names[1], std::string("Alex"));
 }
+
+TEST(config_get_int_follows_stoi_rules)
+{
+    const auto dir = tempDir("getint");
+    maintenance::Config cfg(dir / "config.yml");
+    CHECK(cfg.saveDefault("plus: +5\n"
+                          "minus: -3\n"
+                          "padded: \"  7\"\n"
+                          "trailing: 12abc\n"
+                          "huge: 99999999999\n"
+                          "empty:\n"
+                          "sign_only: +\n"
+                          "double_sign: +-5\n"
+                          "hex: 0x10\n"
+                          "zero: 0\n"));
+    CHECK_EQ(cfg.getInt("plus", -1), 5);
+    CHECK_EQ(cfg.getInt("minus", -1), -3);
+    CHECK_EQ(cfg.getInt("padded", -1), 7);
+    CHECK_EQ(cfg.getInt("zero", -1), 0);
+    CHECK_EQ(cfg.getInt("trailing", -1), -1);
+    CHECK_EQ(cfg.getInt("huge", -1), -1);
+    CHECK_EQ(cfg.getInt("empty", -1), -1);
+    CHECK_EQ(cfg.getInt("sign_only", -1), -1);
+    CHECK_EQ(cfg.getInt("double_sign", -1), -1);
+    CHECK_EQ(cfg.getInt("hex", -1), -1);
+    CHECK_EQ(cfg.getInt("missing", -1), -1);
+}
+
+TEST(config_failed_reload_keeps_previous_state)
+{
+    const auto dir = tempDir("failed_reload");
+    maintenance::Config cfg(dir / "config.yml");
+    CHECK(cfg.saveDefault("# keep\nenabled: false\nname: Steve\n"));
+
+    std::filesystem::remove(dir / "config.yml");
+    CHECK(!cfg.reload());
+
+    // The values must survive, and saving afterwards must still write the complete file (comment included).
+    CHECK(!cfg.getBool("enabled", true));
+    CHECK_EQ(cfg.getString("name"), std::string("Steve"));
+    CHECK(cfg.save());
+    const auto text = slurp(dir / "config.yml");
+    CHECK(text.find("# keep") != std::string::npos);
+    CHECK(text.find("name: Steve") != std::string::npos);
+}
+
+TEST(config_save_replaces_file_and_leaves_no_temp_file)
+{
+    const auto dir = tempDir("atomic_ok");
+    maintenance::Config cfg(dir / "config.yml");
+    CHECK(cfg.saveDefault("a: 1\n"));
+    cfg.set("a", "2");
+    CHECK(cfg.save());
+    CHECK_EQ(slurp(dir / "config.yml"), std::string("a: 2\n"));
+    CHECK(!std::filesystem::exists(dir / "config.yml.tmp"));
+}
+
+TEST(config_failed_save_leaves_original_untouched)
+{
+    const auto dir = tempDir("atomic_fail");
+    maintenance::Config cfg(dir / "config.yml");
+    CHECK(cfg.saveDefault("a: 1\n"));
+
+    // A directory squatting on the temp file name makes the temp write fail, which simulates any write error.
+    std::filesystem::create_directory(dir / "config.yml.tmp");
+    cfg.set("a", "2");
+    CHECK(!cfg.save());
+    CHECK_EQ(slurp(dir / "config.yml"), std::string("a: 1\n"));
+}

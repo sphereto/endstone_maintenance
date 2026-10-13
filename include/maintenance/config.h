@@ -24,10 +24,10 @@ public:
     /** Writes `content` if the file does not exist yet, then loads the file. */
     bool saveDefault(std::string_view content);
 
-    /** (Re)loads the file from disk. Returns false if it could not be read. */
+    /** (Re)loads the file from disk. Returns false (and keeps the current state) if it could not be read. */
     bool reload();
 
-    /** Writes the current state back to disk, keeping comments and ordering. */
+    /** Writes the current state back to disk atomically (temp file + rename), keeping comments and ordering. */
     bool save() const;
 
     [[nodiscard]] bool has(const std::string &key) const;

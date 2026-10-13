@@ -11,12 +11,16 @@ All notable changes to this project are documented here. The format follows
 - `/maintenance` command (alias `/mt`) with `on`, `off`, `status`, `reload`, `list`, `add`, `remove` and `password`.
 - `maintenance.command` permission.
 - Maintenance whitelist (`maintenance.whitelist`).
-- Full lockdown for players on the login screen: movement, chat, commands, interaction, block break/place and item drop
-  are cancelled.
+- Full lockdown for players on the login screen: movement, chat, commands, block and entity interaction, block
+  break/place, item drop, pickup and use, and emotes are cancelled. Looking around is allowed: only real position
+  changes are cancelled, so the player is not teleported back for every camera turn.
+- Blindness/slowness/resistance applied on the login screen are removed when the player logs in or is kicked, or on
+  their next join if they disconnected on the login screen. Effects are only removed if the plugin applied them.
 - Server-list MOTD while maintenance is on (`messages.motd`).
 - Configurable messages and form text (`messages.*`) and `maintenance.apply_effects`.
 - Enabling maintenance now locks players who are already online; disabling it releases them.
-- Unit tests for the config parser and form-response parser.
+- Unit tests for the config parser, form-response parser, settings (including a check that the shipped config matches
+  the built-in defaults) and the movement threshold.
 - `test-build.yml` workflow: downloadable Linux and Windows builds for every non-main push, or on demand with a
   chosen build type and Endstone version, so changes can be tried on a real server without cutting a release.
 - `build.yml` reusable workflow shared by CI, releases and test builds.
@@ -29,7 +33,11 @@ All notable changes to this project are documented here. The format follows
 - Reorganised sources into `include/maintenance/` and `src/`; the Endstone-independent code can be built and tested
   without downloading Endstone (`-DMAINTENANCE_BUILD_PLUGIN=OFF -DMAINTENANCE_BUILD_TESTS=ON`).
 - The config file is located through the plugin data folder, supports comments, and is preserved when the plugin saves it.
-- Config is reloaded with `/maintenance reload` instead of on every player join.
+  Saving is atomic (temporary file, then rename), so a crash or full disk cannot leave a truncated config.
+- Config is reloaded with `/maintenance reload` instead of on every player join. Settings are parsed once into a typed
+  snapshot, the whitelist is a cached case-insensitive set, and a failed reload keeps the previous settings.
+- Event handlers that cancel a locked player's actions share one implementation and skip events another plugin already
+  cancelled.
 - CI is now `ci.yml` (format check, unit tests, Linux and Windows builds). Releases are a separate `release.yml`
   triggered by `v*` tags: it checks the tag against `CMakeLists.txt` and this changelog, reuses the full CI, then
   publishes the binaries with SHA256 checksums and the changelog entry as release notes. Actions bumped to current

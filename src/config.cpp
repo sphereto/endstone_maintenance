@@ -1,8 +1,9 @@
 #include "maintenance/config.h"
 
-#include <algorithm>
+#include "maintenance/util.h"
+
 #include <cctype>
-#include <exception>
+#include <charconv>
 #include <fstream>
 #include <sstream>
 #include <system_error>
@@ -40,12 +41,36 @@ std::string quoteIfNeeded(const std::string &value)
     return needs_quotes ? "\"" + value + "\"" : value;
 }
 
-std::string toLower(std::string s)
+/**
+ * Writes `content` next to `target` and renames it over the original, so a crash or a full disk while writing can never
+ * leave a truncated config behind: readers see either the complete old file or the complete new one.
+ */
+bool writeAtomically(const std::filesystem::path &target, const std::string &content)
 {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return s;
+    std::error_code ec;
+    auto temporary = target;
+    temporary += ".tmp";
+
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            return false;
+        }
+        out.write(content.data(), static_cast<std::streamsize>(content.size()));
+        out.flush();
+        if (!out) {
+            out.close();
+            std::filesystem::remove(temporary, ec);
+            return false;
+        }
+    }
+
+    std::filesystem::rename(temporary, target, ec);
+    if (ec) {
+        std::filesystem::remove(temporary, ec);
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -58,25 +83,22 @@ bool Config::saveDefault(std::string_view content)
     if (!path_.parent_path().empty()) {
         std::filesystem::create_directories(path_.parent_path(), ec);
     }
-    if (!std::filesystem::exists(path_, ec)) {
-        std::ofstream out(path_, std::ios::binary);
-        if (!out) {
-            return false;
-        }
-        out << content;
+    if (!std::filesystem::exists(path_, ec) && !writeAtomically(path_, std::string(content))) {
+        return false;
     }
     return reload();
 }
 
 bool Config::reload()
 {
-    lines_.clear();
-    values_.clear();
-
     std::ifstream in(path_, std::ios::binary);
     if (!in) {
-        return false;
+        return false; // keep the state we already have rather than silently falling back to defaults
     }
+
+    // Parse into temporaries and swap at the end: a failed reload never leaves a half-loaded or empty config behind.
+    std::vector<Line> lines;
+    std::unordered_map<std::string, std::string> values;
 
     std::string raw;
     while (std::getline(in, raw)) {
@@ -91,13 +113,16 @@ bool Config::reload()
             if (delimiter != std::string::npos) {
                 std::string key = trim(std::string_view(trimmed).substr(0, delimiter));
                 if (!key.empty()) {
-                    values_[key] = unquote(trim(std::string_view(trimmed).substr(delimiter + 1)));
+                    values[key] = unquote(trim(std::string_view(trimmed).substr(delimiter + 1)));
                     line.key = std::move(key);
                 }
             }
         }
-        lines_.push_back(std::move(line));
+        lines.push_back(std::move(line));
     }
+
+    lines_ = std::move(lines);
+    values_ = std::move(values);
     return true;
 }
 
@@ -108,14 +133,12 @@ bool Config::save() const
         std::filesystem::create_directories(path_.parent_path(), ec);
     }
 
-    std::ofstream out(path_, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return false;
-    }
+    std::string content;
     for (const auto &line : lines_) {
-        out << line.raw << '\n';
+        content += line.raw;
+        content += '\n';
     }
-    return static_cast<bool>(out);
+    return writeAtomically(path_, content);
 }
 
 bool Config::has(const std::string &key) const
@@ -135,14 +158,23 @@ int Config::getInt(const std::string &key, int def) const
     if (it == values_.end()) {
         return def;
     }
-    try {
-        std::size_t consumed = 0;
-        const int result = std::stoi(it->second, &consumed);
-        return consumed == it->second.size() ? result : def;
+
+    // Same accepted syntax as std::stoi (optional leading whitespace and '+'), but without exceptions or allocation.
+    const char *first = it->second.data();
+    const char *const last = first + it->second.size();
+    while (first != last && std::isspace(static_cast<unsigned char>(*first)) != 0) {
+        ++first;
     }
-    catch (const std::exception &) {
-        return def;
+    if (first != last && *first == '+') {
+        ++first;
+        if (first == last || std::isdigit(static_cast<unsigned char>(*first)) == 0) {
+            return def;
+        }
     }
+
+    int result = 0;
+    const auto [end, ec] = std::from_chars(first, last, result);
+    return (ec == std::errc() && end == last) ? result : def;
 }
 
 bool Config::getBool(const std::string &key, bool def) const
