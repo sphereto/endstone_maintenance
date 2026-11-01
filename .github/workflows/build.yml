@@ -83,7 +83,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Set up CMake and Ninja
-        uses: lukka/get-cmake@v4.4.4
+        uses: lukka/get-cmake@v4.4.5
 
       - name: Set up Clang and libc++ (Linux)
         if: runner.os == 'Linux'
